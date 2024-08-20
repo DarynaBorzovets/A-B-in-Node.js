@@ -1,0 +1,74 @@
+trigger: none
+
+parameters:
+- name: devMatchSubmissionId
+  displayName: DevMatch Submission ID
+  type: string
+  default: NULL
+
+- name: devMatchRepoUrl
+  displayName: A DevMatch git repo
+  type: string
+  default: NULL
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  DEVMATCH_SUBMISSION_ID: ${{ parameters.devMatchSubmissionId }}
+  DEVMATCH_USER_REPO_URL: ${{ parameters.devMatchRepoUrl }}
+
+steps:
+- task: CmdLine@2
+  inputs:
+    script: |
+      echo devmatch identifier is ${{ variables.DEVMATCH_SUBMISSION_ID }}
+  displayName: "devMatchSubmissionId: ${{ variables.DEVMATCH_SUBMISSION_ID }}"
+  condition: ne(variables['DEVMATCH_SUBMISSION_ID'], 'NULL')
+
+- task: NodeTool@0
+  inputs:
+    versionSpec: '18.x'
+  displayName: 'Install Node.js'
+
+# Now we overlay the user repo on top of the original repo
+# Save the original HEAD so that we can generated a diff later
+- script: |
+    git rev-parse HEAD > ORIGINAL_HEAD_COMMIT
+    echo "Repo to pull from ${{ variables.DEVMATCH_USER_REPO_URL }}"
+    git remote add devmatch ${{ variables.DEVMATCH_USER_REPO_URL }}
+    git fetch --all
+    git pull --rebase devmatch main
+  condition: ne(variables['DEVMATCH_USER_REPO_URL'], 'NULL')
+  displayName: Overlay user repo
+  failOnStderr: false
+  continueOnError: false
+
+
+- script: |
+    mkdir $(System.DefaultWorkingDirectory)/publish
+  displayName: Create publish folder
+
+- script: |
+    cat ORIGINAL_HEAD_COMMIT
+    cat ORIGINAL_HEAD_COMMIT | git diff `xargs` > $(System.DefaultWorkingDirectory)/publish/CODE-DIFF.DIFF
+  condition: ne(variables['DEVMATCH_USER_REPO_URL'], 'NULL')
+  displayName: Save code diff
+  failOnStderr: true
+
+- script: |
+    npm install
+  displayName: 'install dependencies'
+
+- script: |
+    node node_modules/jest/bin/jest.js --json --outputFile test-output.json
+  displayName: 'run tests'
+  failOnStderr: false
+
+- task: PublishBuildArtifacts@1
+  condition: always()
+  inputs:
+    PathtoPublish: '$(System.DefaultWorkingDirectory)/publish'
+    ArtifactName: 'test-output'
+    publishLocation: Container
+
